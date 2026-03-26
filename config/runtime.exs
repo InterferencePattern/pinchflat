@@ -107,9 +107,20 @@ if config_env() == :prod do
 
   config :tzdata, :data_dir, tz_data_path
 
+  {db_pool_size, _} = Integer.parse(System.get_env("DATABASE_POOL_SIZE", "5"))
+  {db_busy_timeout, _} = Integer.parse(System.get_env("DATABASE_BUSY_TIMEOUT", "5000"))
+  db_cache_size = String.to_integer(System.get_env("DATABASE_CACHE_SIZE", "-64000"))
+
   config :pinchflat, Pinchflat.Repo,
     database: db_path,
-    journal_mode: journal_mode
+    journal_mode: journal_mode,
+    pool_size: db_pool_size,
+    busy_timeout: db_busy_timeout,
+    custom_pragmas: [
+      synchronous: "NORMAL",
+      cache_size: db_cache_size,
+      temp_store: "MEMORY"
+    ]
 
   config :pinchflat, Pinchflat.PromEx, disabled: !enable_prometheus
 

@@ -52,6 +52,20 @@ defmodule Pinchflat.Media do
   end
 
   @doc """
+  Returns a list of IDs for media_items that are upgradeable. This is a lighter-weight
+  version of list_upgradeable_media_items/0 that avoids loading full rows into memory.
+
+  Returns [integer()]
+  """
+  def list_upgradeable_media_item_ids do
+    MediaQuery.new()
+    |> MediaQuery.require_assoc(:media_profile)
+    |> where(^MediaQuery.upgradeable())
+    |> select([mi], mi.id)
+    |> Repo.all()
+  end
+
+  @doc """
   Returns a list of pending media_items for a given source, where
   pending means the media_item satisfies `MediaQuery.pending`. You
   should really check out that function if you need to know more
@@ -87,7 +101,7 @@ defmodule Pinchflat.Media do
   Returns a list of media_items that match the search term. Adds a `matching_search_term`
   virtual field to the result set.
 
-  Has explit handling for blank search terms because SQLite doesn't like empty MATCH clauses.
+  Has explicit handling for blank search terms because SQLite doesn't like empty MATCH clauses.
 
   Returns [%MediaItem{}, ...].
   """
