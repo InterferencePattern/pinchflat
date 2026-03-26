@@ -59,8 +59,9 @@ config :pinchflat, Oban,
     local_data: 8
   ],
   plugins: [
-    # Keep old jobs for 30 days for display in the UI
-    {Oban.Plugins.Pruner, max_age: 30 * 24 * 60 * 60},
+    # Keep old jobs for 30 days for display in the UI.
+    # Default Oban interval is 30s which creates unnecessary write pressure on slow storage.
+    {Oban.Plugins.Pruner, max_age: 30 * 24 * 60 * 60, interval: :timer.minutes(5)},
     {Oban.Plugins.Cron,
      crontab: [
        {"#{current_minute} #{current_hour} * * *", Pinchflat.YtDlp.UpdateWorker},
@@ -110,12 +111,17 @@ if config_env() == :prod do
   {db_pool_size, _} = Integer.parse(System.get_env("DATABASE_POOL_SIZE", "5"))
   {db_busy_timeout, _} = Integer.parse(System.get_env("DATABASE_BUSY_TIMEOUT", "5000"))
   db_cache_size = String.to_integer(System.get_env("DATABASE_CACHE_SIZE", "-64000"))
+  # checkout_timeout must exceed busy_timeout so Ecto doesn't kill connections
+  # while SQLite is still waiting for a lock. Default adds a 50% buffer.
+  default_checkout_timeout = Integer.to_string(round(db_busy_timeout * 1.5))
+  {db_checkout_timeout, _} = Integer.parse(System.get_env("DATABASE_CHECKOUT_TIMEOUT", default_checkout_timeout))
 
   config :pinchflat, Pinchflat.Repo,
     database: db_path,
     journal_mode: journal_mode,
     pool_size: db_pool_size,
     busy_timeout: db_busy_timeout,
+    checkout_timeout: db_checkout_timeout,
     custom_pragmas: [
       synchronous: "NORMAL",
       cache_size: db_cache_size,
