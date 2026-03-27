@@ -111,17 +111,18 @@ if config_env() == :prod do
   {db_pool_size, _} = Integer.parse(System.get_env("DATABASE_POOL_SIZE", "5"))
   {db_busy_timeout, _} = Integer.parse(System.get_env("DATABASE_BUSY_TIMEOUT", "5000"))
   db_cache_size = String.to_integer(System.get_env("DATABASE_CACHE_SIZE", "-64000"))
-  # checkout_timeout must exceed busy_timeout so Ecto doesn't kill connections
-  # while SQLite is still waiting for a lock. Default adds a 50% buffer.
-  default_checkout_timeout = Integer.to_string(round(db_busy_timeout * 1.5))
-  {db_checkout_timeout, _} = Integer.parse(System.get_env("DATABASE_CHECKOUT_TIMEOUT", default_checkout_timeout))
+  # DBConnection's :timeout controls how long a client waits for a connection
+  # checkout. It must exceed busy_timeout or Ecto kills connections while SQLite
+  # is still retrying the lock. Default adds a 50% buffer over busy_timeout.
+  default_db_timeout = Integer.to_string(round(db_busy_timeout * 1.5))
+  {db_timeout, _} = Integer.parse(System.get_env("DATABASE_TIMEOUT", default_db_timeout))
 
   config :pinchflat, Pinchflat.Repo,
     database: db_path,
     journal_mode: journal_mode,
     pool_size: db_pool_size,
     busy_timeout: db_busy_timeout,
-    checkout_timeout: db_checkout_timeout,
+    timeout: db_timeout,
     custom_pragmas: [
       synchronous: "NORMAL",
       cache_size: db_cache_size,
