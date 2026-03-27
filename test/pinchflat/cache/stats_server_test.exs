@@ -1,6 +1,9 @@
 defmodule Pinchflat.Cache.StatsServerTest do
   use Pinchflat.DataCase, async: false
 
+  import Pinchflat.SourcesFixtures
+  import Pinchflat.MediaFixtures
+
   alias Pinchflat.Cache
   alias Pinchflat.Cache.StatsServer
 
@@ -70,6 +73,44 @@ defmodule Pinchflat.Cache.StatsServerTest do
       assert Map.has_key?(stats, :source_count)
       assert Map.has_key?(stats, :media_item_size)
       assert Map.has_key?(stats, :media_item_count)
+    end
+
+    test "populates {:source_counts, source_id} for each non-deleted source" do
+      source = source_fixture()
+
+      # Ensure no stale entry exists before recompute
+      Cache.delete({:source_counts, source.id})
+
+      :ok = GenServer.call(server_pid(), :recompute)
+
+      counts = Cache.get({:source_counts, source.id}, fn -> nil end)
+      assert is_map(counts)
+      assert Map.has_key?(counts, :downloaded_count)
+      assert Map.has_key?(counts, :pending_count)
+      assert is_integer(counts.downloaded_count)
+      assert is_integer(counts.pending_count)
+    end
+
+    test "source_counts reflects actual downloaded and pending media" do
+      source = source_fixture()
+
+      # Create one downloaded media item (media_filepath is set by default in media_item_fixture)
+      _downloaded = media_item_fixture(source_id: source.id)
+
+      :ok = GenServer.call(server_pid(), :recompute)
+
+      counts = Cache.get({:source_counts, source.id}, fn -> nil end)
+      assert counts.downloaded_count == 1
+      assert counts.pending_count == 0
+    end
+
+    test "does not create a cache entry for deleted sources" do
+      deleted_source = source_fixture(marked_for_deletion_at: DateTime.utc_now())
+
+      :ok = GenServer.call(server_pid(), :recompute)
+
+      result = Cache.get({:source_counts, deleted_source.id}, fn -> :missing end)
+      assert result == :missing
     end
   end
 end

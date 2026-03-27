@@ -92,7 +92,54 @@ defmodule Pinchflat.Cache.StatsServer do
     Cache.put(:home_stats, value)
   end
 
-  # Stubs — will be implemented in later phases
-  defp recompute_source_counts, do: :ok
+  defp recompute_source_counts do
+    alias Pinchflat.Repo
+    alias Pinchflat.Media.MediaItem
+    alias Pinchflat.Media.MediaQuery
+    alias Pinchflat.Sources.Source
+    import Ecto.Query
+
+    # Fetch counts for downloaded items per source using a single GROUP BY query
+    downloaded_counts =
+      from(m in MediaItem,
+        where: ^MediaQuery.downloaded(),
+        group_by: m.source_id,
+        select: {m.source_id, count(m.id)}
+      )
+      |> Repo.all()
+      |> Map.new()
+
+    # Fetch counts for pending items per source using a single GROUP BY query.
+    # Pending conditions reference source and media_profile bindings, so we join them.
+    pending_counts =
+      from(m in MediaItem,
+        inner_join: s in assoc(m, :source),
+        inner_join: mp in assoc(s, :media_profile),
+        where: ^MediaQuery.pending(),
+        group_by: m.source_id,
+        select: {m.source_id, count(m.id)}
+      )
+      |> Repo.all()
+      |> Map.new()
+
+    # Fetch all non-deleted source IDs
+    source_ids =
+      from(s in Source, where: is_nil(s.marked_for_deletion_at), select: s.id)
+      |> Repo.all()
+
+    # Clean up stale entries for deleted sources
+    :ets.match_delete(Cache.table_name(), {{:source_counts, :_}, :_})
+
+    # Write a cache entry per source
+    Enum.each(source_ids, fn id ->
+      counts = %{
+        downloaded_count: Map.get(downloaded_counts, id, 0),
+        pending_count: Map.get(pending_counts, id, 0)
+      }
+
+      Cache.put({:source_counts, id}, counts)
+    end)
+  end
+
   defp recompute_history_counts, do: :ok
 end
