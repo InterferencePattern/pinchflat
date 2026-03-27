@@ -201,5 +201,29 @@ defmodule Pinchflat.Cache.StatsServer do
     end)
   end
 
-  defp recompute_history_counts, do: :ok
+  defp recompute_history_counts do
+    alias Pinchflat.Repo
+    alias Pinchflat.Media.MediaItem
+    alias Pinchflat.Media.MediaQuery
+    import Ecto.Query
+
+    pending_count =
+      from(m in MediaItem,
+        inner_join: s in assoc(m, :source),
+        inner_join: mp in assoc(s, :media_profile),
+        where: ^MediaQuery.pending()
+      )
+      |> Repo.aggregate(:count, :id)
+
+    downloaded_count =
+      from(m in MediaItem,
+        inner_join: s in assoc(m, :source),
+        inner_join: mp in assoc(s, :media_profile),
+        where: ^MediaQuery.downloaded()
+      )
+      |> Repo.aggregate(:count, :id)
+
+    Cache.put(:history_pending_count, pending_count)
+    Cache.put(:history_downloaded_count, downloaded_count)
+  end
 end
