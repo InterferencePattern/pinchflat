@@ -136,5 +136,23 @@ defmodule Pinchflat.Cache.StatsServerTest do
       result = Cache.get({:media_item_count, source.id, "pending"}, fn -> nil end)
       assert is_integer(result)
     end
+
+    test "populates :history_pending_count with an integer" do
+      Cache.delete(:history_pending_count)
+
+      :ok = GenServer.call(server_pid(), :recompute)
+
+      result = Cache.get(:history_pending_count, fn -> nil end)
+      assert is_integer(result)
+    end
+
+    test "populates :history_downloaded_count with an integer" do
+      Cache.delete(:history_downloaded_count)
+
+      :ok = GenServer.call(server_pid(), :recompute)
+
+      result = Cache.get(:history_downloaded_count, fn -> nil end)
+      assert is_integer(result)
+    end
   end
 end
