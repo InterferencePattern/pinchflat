@@ -6,6 +6,7 @@ defmodule PinchflatWeb.Sources.MediaItemTableLiveTest do
   import Pinchflat.SourcesFixtures
   import Pinchflat.ProfilesFixtures
 
+  alias Pinchflat.Cache
   alias PinchflatWeb.Sources.MediaItemTableLive
 
   setup do
@@ -75,6 +76,22 @@ defmodule PinchflatWeb.Sources.MediaItemTableLiveTest do
       {:ok, _view, html} = live_isolated(conn, MediaItemTableLive, session: create_session(source, "other"))
 
       assert html =~ "Manually Ignored?"
+    end
+  end
+
+  describe "count caching" do
+    test "uses cached count for total_record_count display when cache is populated", %{conn: conn, source: source} do
+      _media_item = media_item_fixture(source_id: source.id, media_filepath: nil)
+
+      # Pre-populate the cache with a known value
+      Cache.put({:media_item_count, source.id, "pending"}, 42)
+
+      {:ok, _view, html} = live_isolated(conn, MediaItemTableLive, session: create_session(source, "pending"))
+
+      # The rendered count should reflect the cached value, not the real DB count
+      assert html =~ "42"
+
+      Cache.delete({:media_item_count, source.id, "pending"})
     end
   end
 
