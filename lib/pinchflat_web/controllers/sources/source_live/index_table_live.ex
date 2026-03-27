@@ -6,6 +6,7 @@ defmodule PinchflatWeb.Sources.SourceLive.IndexTableLive do
   import PinchflatWeb.Helpers.SortingHelpers
   import PinchflatWeb.Helpers.PaginationHelpers
 
+  alias Pinchflat.Cache
   alias Pinchflat.Repo
   alias Pinchflat.Sources.Source
   alias Pinchflat.Media.MediaItem
@@ -65,6 +66,17 @@ defmodule PinchflatWeb.Sources.SourceLive.IndexTableLive do
       |> limit(^assigns.limit)
       |> offset(^assigns.offset)
       |> Repo.all()
+      |> Enum.map(fn source ->
+        counts =
+          Cache.get({:source_counts, source.id}, fn ->
+            %{
+              downloaded_count: Map.get(source, :downloaded_count, 0) || 0,
+              pending_count: Map.get(source, :pending_count, 0) || 0
+            }
+          end)
+
+        Map.merge(source, counts)
+      end)
 
     assign(socket, %{sources: sources})
   end
