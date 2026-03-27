@@ -70,6 +70,7 @@ defmodule Pinchflat.Cache.StatsServer do
   defp recompute_all do
     recompute_home_stats()
     recompute_source_counts()
+    recompute_media_item_counts()
     recompute_history_counts()
   end
 
@@ -138,6 +139,65 @@ defmodule Pinchflat.Cache.StatsServer do
       }
 
       Cache.put({:source_counts, id}, counts)
+    end)
+  end
+
+  defp recompute_media_item_counts do
+    alias Pinchflat.Repo
+    alias Pinchflat.Media.MediaItem
+    alias Pinchflat.Media.MediaQuery
+    alias Pinchflat.Sources.Source
+    import Ecto.Query
+
+    # Fetch counts for downloaded items per source using a single GROUP BY query
+    downloaded_counts =
+      from(m in MediaItem,
+        where: ^MediaQuery.downloaded(),
+        group_by: m.source_id,
+        select: {m.source_id, count(m.id)}
+      )
+      |> Repo.all()
+      |> Map.new()
+
+    # Fetch counts for pending items per source using a single GROUP BY query
+    pending_counts =
+      from(m in MediaItem,
+        inner_join: s in assoc(m, :source),
+        inner_join: mp in assoc(s, :media_profile),
+        where: ^MediaQuery.pending(),
+        group_by: m.source_id,
+        select: {m.source_id, count(m.id)}
+      )
+      |> Repo.all()
+      |> Map.new()
+
+    # Fetch total counts per source (all media items regardless of state)
+    total_counts =
+      from(m in MediaItem,
+        group_by: m.source_id,
+        select: {m.source_id, count(m.id)}
+      )
+      |> Repo.all()
+      |> Map.new()
+
+    # Fetch all non-deleted source IDs
+    source_ids =
+      from(s in Source, where: is_nil(s.marked_for_deletion_at), select: s.id)
+      |> Repo.all()
+
+    # Clean up stale entries
+    :ets.match_delete(Cache.table_name(), {{:media_item_count, :_, :_}, :_})
+
+    # Write a cache entry per source per state
+    Enum.each(source_ids, fn id ->
+      downloaded = Map.get(downloaded_counts, id, 0)
+      pending = Map.get(pending_counts, id, 0)
+      total = Map.get(total_counts, id, 0)
+      other = max(total - downloaded - pending, 0)
+
+      Cache.put({:media_item_count, id, "downloaded"}, downloaded)
+      Cache.put({:media_item_count, id, "pending"}, pending)
+      Cache.put({:media_item_count, id, "other"}, other)
     end)
   end
 
