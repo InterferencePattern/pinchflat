@@ -6,18 +6,24 @@ defmodule Pinchflat.Cache do
   performed exclusively by `Pinchflat.Cache.StatsServer`, which subscribes
   to PubSub events and recomputes cached values when underlying data changes.
 
-  All public functions accept a fallback_fn that is called transparently when
-  the cache is cold (e.g. immediately after startup before warm-up completes).
+  When the cache is cold (before StatsServer warm-up completes), `get/2`
+  returns the provided default. The default can be a static value or a
+  zero-arity function that is called lazily on cache miss. Use static
+  defaults on pages that load at startup (home page) to avoid competing
+  with warm-up for DB connections.
   """
 
   @table :pinchflat_cache
 
   def table_name, do: @table
 
-  def get(key, fallback_fn) when is_function(fallback_fn, 0) do
+  def get(key, default_or_fn \\ nil) do
     case :ets.lookup(@table, key) do
-      [{^key, value}] -> value
-      [] -> fallback_fn.()
+      [{^key, value}] ->
+        value
+
+      [] ->
+        if is_function(default_or_fn, 0), do: default_or_fn.(), else: default_or_fn
     end
   end
 

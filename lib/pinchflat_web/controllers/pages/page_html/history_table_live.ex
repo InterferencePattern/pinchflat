@@ -117,10 +117,7 @@ defmodule Pinchflat.Pages.HistoryTableLive do
   defp fetch_pagination_attributes(base_query, page, media_state) do
     cache_key = history_cache_key(media_state)
 
-    total_record_count =
-      Cache.get(cache_key, fn ->
-        Repo.aggregate(base_query, :count, :id)
-      end)
+    total_record_count = Cache.get(cache_key, 0)
 
     total_pages = max(ceil(total_record_count / @limit), 1)
     page = NumberUtils.clamp(page, 1, total_pages)
