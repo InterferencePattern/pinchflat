@@ -6,11 +6,24 @@ defmodule Pinchflat.Cache.StatsServer do
   the underlying data changes. In the test environment, the ETS table is
   created but no subscriptions or warm-up are performed — tests control
   cache state directly via `Pinchflat.Cache.put/2`.
+
+  Invalidation events are debounced: rapid bursts of PubSub messages (e.g.
+  Oban emitting many job:state events at startup) are coalesced into a single
+  recompute that runs after a short quiet period.
   """
   use GenServer
   require Logger
 
   alias Pinchflat.Cache
+
+  # Wait this long after startup before the first warm-up, so that Oban and
+  # other processes can finish initializing without contending for DB connections.
+  @warm_up_delay_ms 10_000
+
+  # Debounce window for invalidation events. A recompute is scheduled this many
+  # milliseconds after the last event; any events arriving in the window reset
+  # the timer instead of triggering an immediate recompute.
+  @debounce_ms 2_000
 
   def start_link(opts \\ []) do
     opts = Keyword.put_new(opts, :name, __MODULE__)
@@ -20,15 +33,15 @@ defmodule Pinchflat.Cache.StatsServer do
   @impl GenServer
   def init(%{env: :test} = state) do
     table = ensure_table()
-    {:ok, Map.put(state, :table, table)}
+    {:ok, Map.merge(state, %{table: table, recompute_timer: nil})}
   end
 
   def init(state) do
     table = ensure_table()
     PinchflatWeb.Endpoint.subscribe("job:state")
     PinchflatWeb.Endpoint.subscribe("media_table")
-    Process.send(self(), :warm_up, [])
-    {:ok, Map.put(state, :table, table)}
+    Process.send_after(self(), :warm_up, @warm_up_delay_ms)
+    {:ok, Map.merge(state, %{table: table, recompute_timer: nil})}
   end
 
   defp ensure_table do
@@ -43,18 +56,21 @@ defmodule Pinchflat.Cache.StatsServer do
 
   @impl GenServer
   def handle_info(%{topic: "job:state", event: "change"}, state) do
-    recompute_all()
-    {:noreply, state}
+    {:noreply, schedule_recompute(state)}
   end
 
   def handle_info(%{topic: "media_table", event: "reload"}, state) do
-    recompute_all()
-    {:noreply, state}
+    {:noreply, schedule_recompute(state)}
   end
 
   def handle_info(:warm_up, state) do
     recompute_all()
     {:noreply, state}
+  end
+
+  def handle_info(:recompute, state) do
+    recompute_all()
+    {:noreply, %{state | recompute_timer: nil}}
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
@@ -67,10 +83,15 @@ defmodule Pinchflat.Cache.StatsServer do
 
   # --- Private ---
 
+  defp schedule_recompute(%{recompute_timer: timer} = state) do
+    if timer, do: Process.cancel_timer(timer)
+    new_timer = Process.send_after(self(), :recompute, @debounce_ms)
+    %{state | recompute_timer: new_timer}
+  end
+
   defp recompute_all do
     recompute_home_stats()
-    recompute_source_counts()
-    recompute_media_item_counts()
+    recompute_per_source_counts()
     recompute_history_counts()
   end
 
@@ -93,14 +114,16 @@ defmodule Pinchflat.Cache.StatsServer do
     Cache.put(:home_stats, value)
   end
 
-  defp recompute_source_counts do
+  # Computes all per-source counts in a single pass to avoid running the same
+  # expensive GROUP BY queries twice (previously done separately in
+  # recompute_source_counts and recompute_media_item_counts).
+  defp recompute_per_source_counts do
     alias Pinchflat.Repo
     alias Pinchflat.Media.MediaItem
     alias Pinchflat.Media.MediaQuery
     alias Pinchflat.Sources.Source
     import Ecto.Query
 
-    # Fetch counts for downloaded items per source using a single GROUP BY query
     downloaded_counts =
       from(m in MediaItem,
         where: ^MediaQuery.downloaded(),
@@ -110,8 +133,6 @@ defmodule Pinchflat.Cache.StatsServer do
       |> Repo.all()
       |> Map.new()
 
-    # Fetch counts for pending items per source using a single GROUP BY query.
-    # Pending conditions reference source and media_profile bindings, so we join them.
     pending_counts =
       from(m in MediaItem,
         inner_join: s in assoc(m, :source),
@@ -123,55 +144,6 @@ defmodule Pinchflat.Cache.StatsServer do
       |> Repo.all()
       |> Map.new()
 
-    # Fetch all non-deleted source IDs
-    source_ids =
-      from(s in Source, where: is_nil(s.marked_for_deletion_at), select: s.id)
-      |> Repo.all()
-
-    # Clean up stale entries for deleted sources
-    :ets.match_delete(Cache.table_name(), {{:source_counts, :_}, :_})
-
-    # Write a cache entry per source
-    Enum.each(source_ids, fn id ->
-      counts = %{
-        downloaded_count: Map.get(downloaded_counts, id, 0),
-        pending_count: Map.get(pending_counts, id, 0)
-      }
-
-      Cache.put({:source_counts, id}, counts)
-    end)
-  end
-
-  defp recompute_media_item_counts do
-    alias Pinchflat.Repo
-    alias Pinchflat.Media.MediaItem
-    alias Pinchflat.Media.MediaQuery
-    alias Pinchflat.Sources.Source
-    import Ecto.Query
-
-    # Fetch counts for downloaded items per source using a single GROUP BY query
-    downloaded_counts =
-      from(m in MediaItem,
-        where: ^MediaQuery.downloaded(),
-        group_by: m.source_id,
-        select: {m.source_id, count(m.id)}
-      )
-      |> Repo.all()
-      |> Map.new()
-
-    # Fetch counts for pending items per source using a single GROUP BY query
-    pending_counts =
-      from(m in MediaItem,
-        inner_join: s in assoc(m, :source),
-        inner_join: mp in assoc(s, :media_profile),
-        where: ^MediaQuery.pending(),
-        group_by: m.source_id,
-        select: {m.source_id, count(m.id)}
-      )
-      |> Repo.all()
-      |> Map.new()
-
-    # Fetch total counts per source (all media items regardless of state)
     total_counts =
       from(m in MediaItem,
         group_by: m.source_id,
@@ -180,21 +152,20 @@ defmodule Pinchflat.Cache.StatsServer do
       |> Repo.all()
       |> Map.new()
 
-    # Fetch all non-deleted source IDs
     source_ids =
       from(s in Source, where: is_nil(s.marked_for_deletion_at), select: s.id)
       |> Repo.all()
 
-    # Clean up stale entries
+    :ets.match_delete(Cache.table_name(), {{:source_counts, :_}, :_})
     :ets.match_delete(Cache.table_name(), {{:media_item_count, :_, :_}, :_})
 
-    # Write a cache entry per source per state
     Enum.each(source_ids, fn id ->
       downloaded = Map.get(downloaded_counts, id, 0)
       pending = Map.get(pending_counts, id, 0)
       total = Map.get(total_counts, id, 0)
       other = max(total - downloaded - pending, 0)
 
+      Cache.put({:source_counts, id}, %{downloaded_count: downloaded, pending_count: pending})
       Cache.put({:media_item_count, id, "downloaded"}, downloaded)
       Cache.put({:media_item_count, id, "pending"}, pending)
       Cache.put({:media_item_count, id, "other"}, other)
@@ -207,6 +178,7 @@ defmodule Pinchflat.Cache.StatsServer do
     alias Pinchflat.Media.MediaQuery
     import Ecto.Query
 
+    # pending references source + media_profile bindings, so joins are required.
     pending_count =
       from(m in MediaItem,
         inner_join: s in assoc(m, :source),
@@ -215,12 +187,9 @@ defmodule Pinchflat.Cache.StatsServer do
       )
       |> Repo.aggregate(:count, :id)
 
+    # downloaded only checks media_filepath — no joins needed.
     downloaded_count =
-      from(m in MediaItem,
-        inner_join: s in assoc(m, :source),
-        inner_join: mp in assoc(s, :media_profile),
-        where: ^MediaQuery.downloaded()
-      )
+      from(m in MediaItem, where: ^MediaQuery.downloaded())
       |> Repo.aggregate(:count, :id)
 
     Cache.put(:history_pending_count, pending_count)
