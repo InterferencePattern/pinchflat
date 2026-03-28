@@ -109,7 +109,7 @@ if config_env() == :prod do
   config :tzdata, :data_dir, tz_data_path
 
   {db_pool_size, _} = Integer.parse(System.get_env("DATABASE_POOL_SIZE", "5"))
-  {db_busy_timeout, _} = Integer.parse(System.get_env("DATABASE_BUSY_TIMEOUT", "5000"))
+  {db_busy_timeout, _} = Integer.parse(System.get_env("DATABASE_BUSY_TIMEOUT", "10000"))
   db_cache_size = String.to_integer(System.get_env("DATABASE_CACHE_SIZE", "-64000"))
   # DBConnection's :timeout controls how long a client waits for a connection
   # checkout. It must exceed busy_timeout or Ecto kills connections while SQLite
