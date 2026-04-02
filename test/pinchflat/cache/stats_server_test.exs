@@ -87,8 +87,10 @@ defmodule Pinchflat.Cache.StatsServerTest do
       assert is_map(counts)
       assert Map.has_key?(counts, :downloaded_count)
       assert Map.has_key?(counts, :pending_count)
+      assert Map.has_key?(counts, :media_size_bytes)
       assert is_integer(counts.downloaded_count)
       assert is_integer(counts.pending_count)
+      assert is_integer(counts.media_size_bytes)
     end
 
     test "source_counts reflects actual downloaded and pending media" do

@@ -18,22 +18,23 @@ defmodule Pinchflat.Cache do
   def table_name, do: @table
 
   def get(key, default_or_fn \\ nil) do
-    case :ets.lookup(@table, key) do
-      [{^key, value}] ->
-        value
-
-      [] ->
-        if is_function(default_or_fn, 0), do: default_or_fn.(), else: default_or_fn
+    if :ets.whereis(@table) == :undefined do
+      if is_function(default_or_fn, 0), do: default_or_fn.(), else: default_or_fn
+    else
+      case :ets.lookup(@table, key) do
+        [{^key, value}] -> value
+        [] -> if is_function(default_or_fn, 0), do: default_or_fn.(), else: default_or_fn
+      end
     end
   end
 
   def put(key, value) do
-    :ets.insert(@table, {key, value})
+    if :ets.whereis(@table) != :undefined, do: :ets.insert(@table, {key, value})
     :ok
   end
 
   def delete(key) do
-    :ets.delete(@table, key)
+    if :ets.whereis(@table) != :undefined, do: :ets.delete(@table, key)
     :ok
   end
 end

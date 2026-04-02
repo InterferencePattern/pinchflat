@@ -110,7 +110,7 @@ defmodule PinchflatWeb.Sources.SourceLive.IndexTableLiveTest do
     test "renders downloaded_count and pending_count from the cache", %{conn: conn} do
       source = source_fixture()
 
-      Cache.put({:source_counts, source.id}, %{downloaded_count: 42, pending_count: 7})
+      Cache.put({:source_counts, source.id}, %{downloaded_count: 42, pending_count: 7, media_size_bytes: 0})
 
       {:ok, _view, html} = live_isolated(conn, IndexTableLive, session: create_session())
 
