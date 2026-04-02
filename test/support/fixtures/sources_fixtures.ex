@@ -114,6 +114,55 @@ defmodule Pinchflat.SourcesFixtures do
     |> Enum.map_join("\n", &Phoenix.json_library().encode!(&1))
   end
 
+  def flat_media_ids_return_fixture(video_ids \\ ["video1", "video2", "video3"]) do
+    video_ids
+    |> Enum.map(fn id -> %{id: id, url: "https://example.com/#{id}"} end)
+    |> Enum.map_join("\n", &Phoenix.json_library().encode!(&1))
+  end
+
+  def source_attribute_return_fixture(video_id) do
+    attrs =
+      case video_id do
+        "video1" ->
+          %{
+            id: "video1",
+            title: "Video 1",
+            original_url: "https://example.com/video1",
+            live_status: "not_live",
+            description: "desc1",
+            aspect_ratio: 1.67,
+            duration: 12.34,
+            upload_date: "20210101"
+          }
+
+        "video2" ->
+          %{
+            id: "video2",
+            title: "Video 2",
+            original_url: "https://example.com/video2",
+            live_status: "is_live",
+            description: "desc2",
+            aspect_ratio: 1.67,
+            duration: 345.67,
+            upload_date: "20220202"
+          }
+
+        "video3" ->
+          %{
+            id: "video3",
+            title: "Video 3",
+            original_url: "https://example.com/video3",
+            live_status: "not_live",
+            description: "desc3",
+            aspect_ratio: 1.0,
+            duration: 678.90,
+            upload_date: "20230303"
+          }
+      end
+
+    Phoenix.json_library().encode!(attrs)
+  end
+
   def source_details_return_fixture(attrs \\ %{}) do
     channel_id = Faker.String.base64(12)
 
