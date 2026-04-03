@@ -47,8 +47,8 @@ defmodule Pinchflat.FastIndexing.FastIndexingHelpers do
     source = Repo.preload(source, [:media_profile])
 
     {:ok, media_ids} = get_recent_media_ids(source)
-    existing_media_items = list_media_items_by_media_id_for(source, media_ids)
-    new_media_ids = media_ids -- Enum.map(existing_media_items, & &1.media_id)
+    existing_media_ids = list_media_ids_by_media_id_for(source, media_ids)
+    new_media_ids = media_ids -- existing_media_ids
 
     maybe_new_media_items =
       Enum.map(new_media_ids, fn media_id ->
@@ -81,9 +81,10 @@ defmodule Pinchflat.FastIndexing.FastIndexingHelpers do
     end
   end
 
-  defp list_media_items_by_media_id_for(source, media_ids) do
+  defp list_media_ids_by_media_id_for(source, media_ids) do
     MediaQuery.new()
     |> where(^dynamic([mi], ^MediaQuery.for_source(source) and mi.media_id in ^media_ids))
+    |> select([mi], mi.media_id)
     |> Repo.all()
   end
 
