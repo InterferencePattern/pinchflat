@@ -12,6 +12,11 @@ defmodule Pinchflat.Downloading.MediaRetentionWorker do
 
   alias Pinchflat.Repo
   alias Pinchflat.Media
+  alias Pinchflat.Media.MediaItem
+
+  # description blobs are large and not needed for file deletion — excluding them avoids
+  # reading megabytes of text off spinning disk during every retention scan.
+  @fields_without_description MediaItem.__schema__(:fields) -- [:description]
 
   @doc """
   Deletes media items that are past their retention date and prevents
@@ -34,6 +39,7 @@ defmodule Pinchflat.Downloading.MediaRetentionWorker do
       MediaQuery.new()
       |> MediaQuery.require_assoc(:source)
       |> where(^MediaQuery.cullable())
+      |> select([m, _s], struct(m, ^@fields_without_description))
       |> Repo.all()
 
     Logger.info("Culling #{length(cullable_media)} media items past their retention date")
@@ -56,6 +62,7 @@ defmodule Pinchflat.Downloading.MediaRetentionWorker do
       MediaQuery.new()
       |> MediaQuery.require_assoc(:source)
       |> where(^MediaQuery.deletable_based_on_source_cutoff())
+      |> select([m, _s], struct(m, ^@fields_without_description))
       |> Repo.all()
 
     Logger.info("Deleting #{length(deletable_media)} media items that are from before the source cutoff")
