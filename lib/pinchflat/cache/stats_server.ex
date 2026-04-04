@@ -2,27 +2,40 @@ defmodule Pinchflat.Cache.StatsServer do
   @moduledoc """
   GenServer that owns the ETS cache table and keeps it warm.
 
-  Subscribes to PubSub topics and recomputes cached aggregate values when
-  the underlying data changes. In the test environment, the ETS table is
-  created but no subscriptions or warm-up are performed — tests control
-  cache state directly via `Pinchflat.Cache.put/2`.
+  ## Recompute strategy
 
-  Invalidation events are debounced: rapid bursts of PubSub messages (e.g.
-  Oban emitting many job:state events at startup) are coalesced into a single
-  recompute that runs after a short quiet period.
+  Full recomputes run at boot (after a warm-up delay) and on `media_table:reload`
+  events. These run GROUP BY queries across all sources and are fast thanks to the
+  covering index on `media_items(source_id, media_size_bytes) WHERE media_filepath IS NOT NULL`.
+
+  Incremental updates run when specific media operations occur (download, delete,
+  index). The `media.ex` context broadcasts `stats:source` events with the affected
+  `source_id`. StatsServer debounces these and recomputes only the changed source
+  using point queries (WHERE source_id = X), which are much cheaper than a full
+  GROUP BY across all sources.
+
+  In the test environment, the ETS table is created but no subscriptions or warm-up
+  are performed — tests control cache state directly via `Pinchflat.Cache.put/2`.
   """
   use GenServer
   require Logger
 
+  import Ecto.Query, warn: false
+
   alias Pinchflat.Cache
+  alias Pinchflat.Repo
+  alias Pinchflat.Media.MediaItem
+  alias Pinchflat.Media.MediaQuery
+  alias Pinchflat.Sources.Source
+  alias Pinchflat.Profiles.MediaProfile
 
   # Wait this long after startup before the first warm-up, so that Oban and
   # other processes can finish initializing without contending for DB connections.
   @warm_up_delay_ms 30_000
 
-  # Debounce window for invalidation events. A recompute is scheduled this many
-  # milliseconds after the last event; any events arriving in the window reset
-  # the timer instead of triggering an immediate recompute.
+  # Debounce window for per-source invalidation events. A recompute is scheduled
+  # this many milliseconds after the last event; any events arriving in the window
+  # reset the timer instead of triggering an immediate recompute.
   @debounce_ms 2_000
 
   def start_link(opts \\ []) do
@@ -33,15 +46,17 @@ defmodule Pinchflat.Cache.StatsServer do
   @impl GenServer
   def init(%{env: :test} = state) do
     table = ensure_table()
-    {:ok, Map.merge(state, %{table: table, recompute_timer: nil})}
+    {:ok, Map.merge(state, %{table: table, dirty_sources: MapSet.new(), dirty_timer: nil})}
   end
 
   def init(state) do
     table = ensure_table()
-    Phoenix.PubSub.subscribe(Pinchflat.PubSub, "job:state")
+    # Per-source incremental updates from media.ex operations
+    Phoenix.PubSub.subscribe(Pinchflat.PubSub, "stats:source")
+    # Full recompute when the media table LiveView signals a reload
     Phoenix.PubSub.subscribe(Pinchflat.PubSub, "media_table")
     Process.send_after(self(), :warm_up, @warm_up_delay_ms)
-    {:ok, Map.merge(state, %{table: table, recompute_timer: nil})}
+    {:ok, Map.merge(state, %{table: table, dirty_sources: MapSet.new(), dirty_timer: nil})}
   end
 
   defp ensure_table do
@@ -54,13 +69,18 @@ defmodule Pinchflat.Cache.StatsServer do
     end
   end
 
+  # --- Event handlers ---
+
   @impl GenServer
-  def handle_info(%{topic: "job:state", event: "change"}, state) do
-    {:noreply, schedule_recompute(state)}
+  def handle_info(%{topic: "stats:source", payload: %{source_id: source_id}}, state) do
+    {:noreply, schedule_source_recompute(state, source_id)}
   end
 
   def handle_info(%{topic: "media_table", event: "reload"}, state) do
-    {:noreply, schedule_recompute(state)}
+    # Cancel any pending per-source timer and do a full recompute immediately.
+    cancel_dirty_timer(state)
+    recompute_all()
+    {:noreply, %{state | dirty_sources: MapSet.new(), dirty_timer: nil}}
   end
 
   def handle_info(:warm_up, state) do
@@ -68,9 +88,10 @@ defmodule Pinchflat.Cache.StatsServer do
     {:noreply, state}
   end
 
-  def handle_info(:recompute, state) do
-    recompute_all()
-    {:noreply, %{state | recompute_timer: nil}}
+  def handle_info(:recompute_dirty, %{dirty_sources: dirty} = state) do
+    Enum.each(dirty, &safe_recompute(:recompute_source_stats, fn -> recompute_source_stats(&1) end))
+    safe_recompute(:recompute_home_stats, &recompute_home_stats/0)
+    {:noreply, %{state | dirty_sources: MapSet.new(), dirty_timer: nil}}
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
@@ -89,11 +110,14 @@ defmodule Pinchflat.Cache.StatsServer do
 
   # --- Private ---
 
-  defp schedule_recompute(%{recompute_timer: timer} = state) do
+  defp schedule_source_recompute(%{dirty_sources: dirty, dirty_timer: timer} = state, source_id) do
     if timer, do: Process.cancel_timer(timer)
-    new_timer = Process.send_after(self(), :recompute, @debounce_ms)
-    %{state | recompute_timer: new_timer}
+    new_timer = Process.send_after(self(), :recompute_dirty, @debounce_ms)
+    %{state | dirty_sources: MapSet.put(dirty, source_id), dirty_timer: new_timer}
   end
+
+  defp cancel_dirty_timer(%{dirty_timer: nil}), do: :ok
+  defp cancel_dirty_timer(%{dirty_timer: timer}), do: Process.cancel_timer(timer)
 
   defp recompute_all do
     safe_recompute(:recompute_home_stats, &recompute_home_stats/0)
@@ -109,12 +133,6 @@ defmodule Pinchflat.Cache.StatsServer do
   end
 
   defp recompute_home_stats do
-    alias Pinchflat.Repo
-    alias Pinchflat.Media.MediaItem
-    alias Pinchflat.Sources.Source
-    alias Pinchflat.Profiles.MediaProfile
-    import Ecto.Query
-
     downloaded = from(m in MediaItem, where: not is_nil(m.media_filepath))
 
     value = %{
@@ -131,12 +149,6 @@ defmodule Pinchflat.Cache.StatsServer do
   # expensive GROUP BY queries twice (previously done separately in
   # recompute_source_counts and recompute_media_item_counts).
   defp recompute_per_source_counts do
-    alias Pinchflat.Repo
-    alias Pinchflat.Media.MediaItem
-    alias Pinchflat.Media.MediaQuery
-    alias Pinchflat.Sources.Source
-    import Ecto.Query
-
     downloaded_data =
       from(m in MediaItem,
         where: ^MediaQuery.downloaded(),
@@ -187,12 +199,44 @@ defmodule Pinchflat.Cache.StatsServer do
     end)
   end
 
-  defp recompute_history_counts do
-    alias Pinchflat.Repo
-    alias Pinchflat.Media.MediaItem
-    alias Pinchflat.Media.MediaQuery
-    import Ecto.Query
+  # Recomputes stats for a single source using point queries (WHERE source_id = X).
+  # Much cheaper than the full GROUP BY pass — used for incremental updates when
+  # a specific source's data changes.
+  defp recompute_source_stats(source_id) do
+    downloaded =
+      from(m in MediaItem,
+        where: m.source_id == ^source_id and not is_nil(m.media_filepath),
+        select: %{count: count(m.id), size: sum(m.media_size_bytes)}
+      )
+      |> Repo.one()
 
+    downloaded_count = (downloaded && downloaded.count) || 0
+    media_size_bytes = (downloaded && downloaded.size) || 0
+
+    pending_count =
+      from(m in MediaItem,
+        inner_join: s in assoc(m, :source),
+        inner_join: mp in assoc(s, :media_profile),
+        where: m.source_id == ^source_id and ^MediaQuery.pending(),
+        select: count(m.id)
+      )
+      |> Repo.one()
+      |> Kernel.||(0)
+
+    total_count =
+      from(m in MediaItem, where: m.source_id == ^source_id, select: count(m.id))
+      |> Repo.one()
+      |> Kernel.||(0)
+
+    other = max(total_count - downloaded_count - pending_count, 0)
+
+    Cache.put({:source_counts, source_id}, %{downloaded_count: downloaded_count, pending_count: pending_count, media_size_bytes: media_size_bytes})
+    Cache.put({:media_item_count, source_id, "downloaded"}, downloaded_count)
+    Cache.put({:media_item_count, source_id, "pending"}, pending_count)
+    Cache.put({:media_item_count, source_id, "other"}, other)
+  end
+
+  defp recompute_history_counts do
     # pending references source + media_profile bindings, so joins are required.
     pending_count =
       from(m in MediaItem,

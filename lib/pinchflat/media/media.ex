@@ -18,6 +18,10 @@ defmodule Pinchflat.Media do
   # Some fields should only be set on insert and not on update.
   @fields_to_drop_on_update [:playlist_index]
 
+  # Fields that affect the stats StatsServer caches (downloaded counts, sizes, pending counts).
+  # When any of these change, the affected source's stats need to be refreshed.
+  @stats_fields [:media_filepath, :media_size_bytes, :prevent_download, :culled_at]
+
   @doc """
   Returns the list of media_items.
 
@@ -164,17 +168,25 @@ defmodule Pinchflat.Media do
   def create_media_item_from_backend_attrs(source, media_attrs_struct) do
     attrs = Map.merge(%{source_id: source.id}, Map.from_struct(media_attrs_struct))
 
-    %MediaItem{}
-    |> MediaItem.changeset(attrs)
-    |> Repo.insert(
-      on_conflict: [
-        set:
-          attrs
-          |> Map.drop(@fields_to_drop_on_update)
-          |> Map.to_list()
-      ],
-      conflict_target: [:source_id, :media_id]
-    )
+    result =
+      %MediaItem{}
+      |> MediaItem.changeset(attrs)
+      |> Repo.insert(
+        on_conflict: [
+          set:
+            attrs
+            |> Map.drop(@fields_to_drop_on_update)
+            |> Map.to_list()
+        ],
+        conflict_target: [:source_id, :media_id]
+      )
+
+    case result do
+      {:ok, media_item} -> broadcast_stats_change(media_item.source_id)
+      _ -> :ok
+    end
+
+    result
   end
 
   @doc """
@@ -185,9 +197,19 @@ defmodule Pinchflat.Media do
   def update_media_item(%MediaItem{} = media_item, attrs) do
     update_attrs = Map.drop(attrs, @fields_to_drop_on_update)
 
-    media_item
-    |> MediaItem.changeset(update_attrs)
-    |> Repo.update()
+    result =
+      media_item
+      |> MediaItem.changeset(update_attrs)
+      |> Repo.update()
+
+    stats_relevant = Enum.any?(@stats_fields, &Map.has_key?(update_attrs, &1))
+
+    case result do
+      {:ok, updated} when stats_relevant -> broadcast_stats_change(updated.source_id)
+      _ -> :ok
+    end
+
+    result
   end
 
   @doc """
@@ -208,7 +230,14 @@ defmodule Pinchflat.Media do
 
     # Should delete these no matter what
     delete_internal_metadata_files(media_item)
-    Repo.delete(media_item)
+    result = Repo.delete(media_item)
+
+    case result do
+      {:ok, _} -> broadcast_stats_change(media_item.source_id)
+      _ -> :ok
+    end
+
+    result
   end
 
   @doc """
@@ -267,5 +296,9 @@ defmodule Pinchflat.Media do
     runner = Application.get_env(:pinchflat, :user_script_runner, UserScriptRunner)
 
     runner.run(event, media_item)
+  end
+
+  defp broadcast_stats_change(source_id) do
+    Phoenix.PubSub.broadcast(Pinchflat.PubSub, "stats:source", %{source_id: source_id})
   end
 end
