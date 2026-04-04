@@ -96,6 +96,7 @@ defmodule Pinchflat.Media do
     MediaQuery.new()
     |> MediaQuery.require_assoc(:media_profile)
     |> where(^dynamic(^MediaQuery.for_source(source) and ^MediaQuery.pending()))
+    |> select([m, _s, _mp], struct(m, [:id, :source_id]))
     |> Repo.all()
   end
 
