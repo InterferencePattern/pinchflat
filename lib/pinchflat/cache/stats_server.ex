@@ -5,8 +5,8 @@ defmodule Pinchflat.Cache.StatsServer do
   ## Recompute strategy
 
   Full recomputes run at boot (after a warm-up delay) and on `media_table:reload`
-  events. These run GROUP BY queries across all sources and are fast thanks to the
-  covering index on `media_items(source_id, media_size_bytes) WHERE media_filepath IS NOT NULL`.
+  events. These run GROUP BY queries across all sources and populate per-source
+  count and size caches.
 
   Incremental updates run when specific media operations occur (download, delete,
   index). The `media.ex` context broadcasts `stats:source` events with the affected
@@ -27,7 +27,6 @@ defmodule Pinchflat.Cache.StatsServer do
   alias Pinchflat.Media.MediaItem
   alias Pinchflat.Media.MediaQuery
   alias Pinchflat.Sources.Source
-  alias Pinchflat.Profiles.MediaProfile
 
   # Wait this long after startup before the first warm-up, so that Oban and
   # other processes can finish initializing without contending for DB connections.
@@ -90,7 +89,6 @@ defmodule Pinchflat.Cache.StatsServer do
 
   def handle_info(:recompute_dirty, %{dirty_sources: dirty} = state) do
     Enum.each(dirty, &safe_recompute(:recompute_source_stats, fn -> recompute_source_stats(&1) end))
-    safe_recompute(:recompute_home_stats, &recompute_home_stats/0)
     {:noreply, %{state | dirty_sources: MapSet.new(), dirty_timer: nil}}
   end
 
@@ -120,9 +118,7 @@ defmodule Pinchflat.Cache.StatsServer do
   defp cancel_dirty_timer(%{dirty_timer: timer}), do: Process.cancel_timer(timer)
 
   defp recompute_all do
-    safe_recompute(:recompute_home_stats, &recompute_home_stats/0)
     safe_recompute(:recompute_per_source_counts, &recompute_per_source_counts/0)
-    safe_recompute(:recompute_history_counts, &recompute_history_counts/0)
   end
 
   defp safe_recompute(name, fun) do
@@ -130,19 +126,6 @@ defmodule Pinchflat.Cache.StatsServer do
   rescue
     e ->
       Logger.warning("StatsServer: #{name} failed: #{Exception.message(e)}")
-  end
-
-  defp recompute_home_stats do
-    downloaded = from(m in MediaItem, where: not is_nil(m.media_filepath))
-
-    value = %{
-      media_profile_count: Repo.aggregate(MediaProfile, :count, :id),
-      source_count: Repo.aggregate(Source, :count, :id),
-      media_item_size: Repo.aggregate(downloaded, :sum, :media_size_bytes),
-      media_item_count: Repo.aggregate(downloaded, :count, :id)
-    }
-
-    Cache.put(:home_stats, value)
   end
 
   # Computes all per-source counts in a single pass to avoid running the same
@@ -236,22 +219,4 @@ defmodule Pinchflat.Cache.StatsServer do
     Cache.put({:media_item_count, source_id, "other"}, other)
   end
 
-  defp recompute_history_counts do
-    # pending references source + media_profile bindings, so joins are required.
-    pending_count =
-      from(m in MediaItem,
-        inner_join: s in assoc(m, :source),
-        inner_join: mp in assoc(s, :media_profile),
-        where: ^MediaQuery.pending()
-      )
-      |> Repo.aggregate(:count, :id)
-
-    # downloaded only checks media_filepath — no joins needed.
-    downloaded_count =
-      from(m in MediaItem, where: ^MediaQuery.downloaded())
-      |> Repo.aggregate(:count, :id)
-
-    Cache.put(:history_pending_count, pending_count)
-    Cache.put(:history_downloaded_count, downloaded_count)
-  end
 end

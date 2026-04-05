@@ -7,13 +7,6 @@ defmodule Pinchflat.Cache.StatsServerTest do
   alias Pinchflat.Cache
   alias Pinchflat.Cache.StatsServer
 
-  setup do
-    # The ETS table and StatsServer are already started by the app supervision tree.
-    # Clean up :home_stats before each test to ensure a clean state.
-    Cache.delete(:home_stats)
-    :ok
-  end
-
   # Returns the PID of the already-running StatsServer from the supervision tree.
   defp server_pid, do: Process.whereis(StatsServer)
 
@@ -62,19 +55,6 @@ defmodule Pinchflat.Cache.StatsServerTest do
   end
 
   describe "recompute_all via handle_call(:recompute)" do
-    test "populates :home_stats in the cache with the expected keys" do
-      assert Cache.get(:home_stats, fn -> nil end) == nil
-
-      :ok = GenServer.call(server_pid(), :recompute)
-
-      stats = Cache.get(:home_stats, fn -> nil end)
-      assert is_map(stats)
-      assert Map.has_key?(stats, :media_profile_count)
-      assert Map.has_key?(stats, :source_count)
-      assert Map.has_key?(stats, :media_item_size)
-      assert Map.has_key?(stats, :media_item_count)
-    end
-
     test "populates {:source_counts, source_id} for each non-deleted source" do
       source = source_fixture()
 
@@ -139,22 +119,5 @@ defmodule Pinchflat.Cache.StatsServerTest do
       assert is_integer(result)
     end
 
-    test "populates :history_pending_count with an integer" do
-      Cache.delete(:history_pending_count)
-
-      :ok = GenServer.call(server_pid(), :recompute)
-
-      result = Cache.get(:history_pending_count, fn -> nil end)
-      assert is_integer(result)
-    end
-
-    test "populates :history_downloaded_count with an integer" do
-      Cache.delete(:history_downloaded_count)
-
-      :ok = GenServer.call(server_pid(), :recompute)
-
-      result = Cache.get(:history_downloaded_count, fn -> nil end)
-      assert is_integer(result)
-    end
   end
 end

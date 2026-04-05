@@ -1,29 +1,11 @@
 defmodule PinchflatWeb.PageControllerTest do
   use PinchflatWeb.ConnCase
 
-  alias Pinchflat.Cache
   alias Pinchflat.Settings
 
-  describe "GET / home page stats caching" do
-    setup do
+  describe "GET / home page" do
+    test "renders successfully", %{conn: conn} do
       Settings.set(onboarding: false)
-      Cache.delete(:home_stats)
-      :ok
-    end
-
-    test "renders successfully when :home_stats is populated in the cache", %{conn: conn} do
-      Cache.put(:home_stats, %{
-        media_profile_count: 3,
-        source_count: 5,
-        media_item_size: 1_000_000,
-        media_item_count: 42
-      })
-
-      conn = get(conn, ~p"/")
-      assert html_response(conn, 200) =~ "MENU"
-    end
-
-    test "renders successfully when :home_stats is NOT in the cache (fallback path)", %{conn: conn} do
       conn = get(conn, ~p"/")
       assert html_response(conn, 200) =~ "MENU"
     end
