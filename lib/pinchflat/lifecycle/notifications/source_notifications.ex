@@ -5,29 +5,12 @@ defmodule Pinchflat.Lifecycle.Notifications.SourceNotifications do
 
   require Logger
 
-  use Pinchflat.Media.MediaQuery
-
-  alias Pinchflat.Repo
-
   @doc """
-  Wraps a function that may change the number of pending  or downloaded
-  media items for a source, sending an apprise notification if
-  the count changes.
+  Sends a notification if the count of new media items has changed.
 
-  Returns the return value of the provided function
-  """
-  def wrap_new_media_notification(servers, source, func) do
-    before_count = relevant_media_item_count(source)
-    retval = func.()
-    after_count = relevant_media_item_count(source)
-
-    send_new_media_notification(servers, source, after_count - before_count)
-
-    retval
-  end
-
-  @doc """
-  Sends a notification if the count of new media items has changed
+  The caller is responsible for determining the count of new items
+  (e.g. by counting successful creates from the indexing return value)
+  rather than querying the database for before/after counts.
 
   Returns :ok
   """
@@ -51,27 +34,6 @@ defmodule Pinchflat.Lifecycle.Notifications.SourceNotifications do
     end
 
     :ok
-  end
-
-  defp relevant_media_item_count(source) do
-    if source.download_media do
-      pending_media_item_count(source) + downloaded_media_item_count(source)
-    else
-      0
-    end
-  end
-
-  defp pending_media_item_count(source) do
-    MediaQuery.new()
-    |> MediaQuery.require_assoc(:media_profile)
-    |> where(^dynamic(^MediaQuery.for_source(source) and ^MediaQuery.pending()))
-    |> Repo.aggregate(:count)
-  end
-
-  defp downloaded_media_item_count(source) do
-    MediaQuery.new()
-    |> where(^dynamic(^MediaQuery.for_source(source) and ^MediaQuery.downloaded()))
-    |> Repo.aggregate(:count)
   end
 
   defp backend_runner do

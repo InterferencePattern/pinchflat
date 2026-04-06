@@ -5,6 +5,7 @@ defmodule PinchflatWeb.Sources.SourceLive.IndexTableLiveTest do
   import Pinchflat.SourcesFixtures
   import Pinchflat.ProfilesFixtures
 
+  alias Pinchflat.Cache
   alias Pinchflat.Sources.Source
   alias PinchflatWeb.Sources.SourceLive.IndexTableLive
 
@@ -102,6 +103,21 @@ defmodule PinchflatWeb.Sources.SourceLive.IndexTableLiveTest do
 
       refute render_element(view, "tbody") =~ source1.custom_name
       assert render_element(view, "tbody") =~ source2.custom_name
+    end
+  end
+
+  describe "when counts are pre-populated in the cache" do
+    test "renders downloaded_count and pending_count from the cache", %{conn: conn} do
+      source = source_fixture()
+
+      Cache.put({:source_counts, source.id}, %{downloaded_count: 42, pending_count: 7, media_size_bytes: 0})
+
+      {:ok, _view, html} = live_isolated(conn, IndexTableLive, session: create_session())
+
+      assert html =~ "42"
+      assert html =~ "7"
+
+      Cache.delete({:source_counts, source.id})
     end
   end
 

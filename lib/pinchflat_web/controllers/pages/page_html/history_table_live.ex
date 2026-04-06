@@ -2,11 +2,20 @@ defmodule Pinchflat.Pages.HistoryTableLive do
   use PinchflatWeb, :live_view
   use Pinchflat.Media.MediaQuery
 
+  alias Pinchflat.Cache
   alias Pinchflat.Repo
   alias Pinchflat.Utils.NumberUtils
   alias PinchflatWeb.CustomComponents.TextComponents
 
   @limit 5
+
+  def render(%{loading: true} = assigns) do
+    ~H"""
+    <div class="mb-4 flex items-center">
+      <p class="ml-2">Loading...</p>
+    </div>
+    """
+  end
 
   def render(%{records: []} = assigns) do
     ~H"""
@@ -69,35 +78,57 @@ defmodule Pinchflat.Pages.HistoryTableLive do
   end
 
   def mount(_params, session, socket) do
-    page = 1
-    base_query = generate_base_query(session["media_state"])
-    pagination_attrs = fetch_pagination_attributes(base_query, page)
+    media_state = session["media_state"]
 
-    {:ok, assign(socket, Map.merge(pagination_attrs, %{base_query: base_query}))}
+    if connected?(socket) do
+      page = 1
+      base_query = generate_base_query(media_state)
+      pagination_attrs = fetch_pagination_attributes(base_query, page, media_state)
+
+      {:ok, assign(socket, Map.merge(pagination_attrs, %{base_query: base_query, media_state: media_state, loading: false}))}
+    else
+      {:ok,
+       assign(socket, %{
+         page: 1,
+         total_pages: 1,
+         records: [],
+         total_record_count: 0,
+         base_query: nil,
+         media_state: media_state,
+         loading: true
+       })}
+    end
   end
 
   def handle_event("page_change", %{"direction" => direction}, %{assigns: assigns} = socket) do
     direction = if direction == "inc", do: 1, else: -1
     new_page = assigns.page + direction
-    new_assigns = fetch_pagination_attributes(assigns.base_query, new_page)
+    new_assigns = fetch_pagination_attributes(assigns.base_query, new_page, assigns.media_state)
 
     {:noreply, assign(socket, new_assigns)}
   end
 
   def handle_event("reload_page", _params, %{assigns: assigns} = socket) do
-    new_assigns = fetch_pagination_attributes(assigns.base_query, assigns.page)
+    new_assigns = fetch_pagination_attributes(assigns.base_query, assigns.page, assigns.media_state)
 
     {:noreply, assign(socket, new_assigns)}
   end
 
-  defp fetch_pagination_attributes(base_query, page) do
-    total_record_count = Repo.aggregate(base_query, :count, :id)
+  defp fetch_pagination_attributes(base_query, page, media_state) do
+    cache_key = history_cache_key(media_state)
+
+    total_record_count = Cache.get(cache_key, 0)
+
     total_pages = max(ceil(total_record_count / @limit), 1)
     page = NumberUtils.clamp(page, 1, total_pages)
     records = fetch_records(base_query, page)
 
     %{page: page, total_pages: total_pages, records: records, total_record_count: total_record_count}
   end
+
+  defp history_cache_key("pending"), do: :history_pending_count
+  defp history_cache_key("downloaded"), do: :history_downloaded_count
+  defp history_cache_key(_), do: :history_unknown_count
 
   defp fetch_records(base_query, page) do
     offset = (page - 1) * @limit
@@ -118,7 +149,6 @@ defmodule Pinchflat.Pages.HistoryTableLive do
 
   defp generate_base_query("downloaded") do
     MediaQuery.new()
-    |> MediaQuery.require_assoc(:media_profile)
     |> where(^dynamic(^MediaQuery.downloaded()))
     |> order_by(desc: :id)
   end

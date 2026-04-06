@@ -106,9 +106,12 @@ defmodule Pinchflat.SlowIndexing.MediaCollectionIndexingWorker do
   defp perform_indexing_and_notification(source, indexing_opts) do
     apprise_server = Settings.get!(:apprise_server)
 
-    SourceNotifications.wrap_new_media_notification(apprise_server, source, fn ->
-      SlowIndexingHelpers.index_and_enqueue_download_for_media_items(source, indexing_opts)
-    end)
+    result = SlowIndexingHelpers.index_and_enqueue_download_for_media_items(source, indexing_opts)
+    new_item_count = Enum.count(result, &is_struct(&1, Pinchflat.Media.MediaItem))
+
+    SourceNotifications.send_new_media_notification(apprise_server, source, new_item_count)
+
+    result
   end
 
   defp reschedule_indexing(source) do

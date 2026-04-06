@@ -4,6 +4,7 @@ defmodule Pinchflat.Settings do
   """
   import Ecto.Query, warn: false
 
+  alias Pinchflat.Cache
   alias Pinchflat.Repo
   alias Pinchflat.Settings.Setting
 
@@ -12,23 +13,38 @@ defmodule Pinchflat.Settings do
   to create or delete this record, so it's assertive about
   assuming it's the only one.
 
+  The result is cached in ETS to avoid hitting the database on
+  every call. The cache is invalidated when settings are updated.
+
   Returns %Setting{}
   """
   def record do
-    Setting
-    |> limit(1)
-    |> Repo.one()
+    Cache.get(:settings_record, fn ->
+      Setting
+      |> limit(1)
+      |> Repo.one()
+    end)
   end
 
   @doc """
-  Updates the setting record.
+  Updates the setting record and invalidates the ETS cache.
 
   Returns {:ok, %Setting{}} | {:error, %Ecto.Changeset{}}
   """
   def update_setting(%Setting{} = setting, attrs) do
-    setting
-    |> Setting.changeset(attrs)
-    |> Repo.update()
+    result =
+      setting
+      |> Setting.changeset(attrs)
+      |> Repo.update()
+
+    case result do
+      {:ok, updated} ->
+        Cache.put(:settings_record, updated)
+        {:ok, updated}
+
+      error ->
+        error
+    end
   end
 
   @doc """

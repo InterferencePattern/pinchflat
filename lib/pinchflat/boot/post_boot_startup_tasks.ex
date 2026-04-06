@@ -8,6 +8,7 @@ defmodule Pinchflat.Boot.PostBootStartupTasks do
   """
 
   alias Pinchflat.YtDlp.UpdateWorker, as: YtDlpUpdateWorker
+  alias Pinchflat.Cache.StatsServer
 
   # restart: :temporary means that this process will never be restarted (ie: will run once and then die)
   use GenServer, restart: :temporary
@@ -36,11 +37,16 @@ defmodule Pinchflat.Boot.PostBootStartupTasks do
 
   def init(state) do
     update_yt_dlp()
+    warm_stats_cache()
 
     {:ok, state}
   end
 
   defp update_yt_dlp do
     YtDlpUpdateWorker.kickoff()
+  end
+
+  defp warm_stats_cache do
+    GenServer.cast(StatsServer, :recompute)
   end
 end

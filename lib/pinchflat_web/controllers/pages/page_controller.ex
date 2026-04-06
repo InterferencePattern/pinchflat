@@ -1,7 +1,7 @@
 defmodule PinchflatWeb.Pages.PageController do
   use PinchflatWeb, :controller
-  use Pinchflat.Media.MediaQuery
 
+  alias Pinchflat.Cache
   alias Pinchflat.Repo
   alias Pinchflat.Sources.Source
   alias Pinchflat.Profiles.MediaProfile
@@ -20,14 +20,20 @@ defmodule PinchflatWeb.Pages.PageController do
   end
 
   defp render_home_page(conn) do
-    downloaded_media_items = where(MediaQuery.new(), ^MediaQuery.downloaded())
+    stats =
+      Cache.get(:home_stats, %{
+        media_profile_count: 0,
+        source_count: 0,
+        media_item_size: nil,
+        media_item_count: 0
+      })
 
     conn
     |> render(:home,
-      media_profile_count: Repo.aggregate(MediaProfile, :count, :id),
-      source_count: Repo.aggregate(Source, :count, :id),
-      media_item_size: Repo.aggregate(downloaded_media_items, :sum, :media_size_bytes),
-      media_item_count: Repo.aggregate(downloaded_media_items, :count, :id)
+      media_profile_count: stats.media_profile_count,
+      source_count: stats.source_count,
+      media_item_size: stats.media_item_size,
+      media_item_count: stats.media_item_count
     )
   end
 

@@ -6,9 +6,9 @@ defmodule PinchflatWeb.Sources.SourceLive.IndexTableLive do
   import PinchflatWeb.Helpers.SortingHelpers
   import PinchflatWeb.Helpers.PaginationHelpers
 
+  alias Pinchflat.Cache
   alias Pinchflat.Repo
   alias Pinchflat.Sources.Source
-  alias Pinchflat.Media.MediaItem
 
   def mount(_params, session, socket) do
     limit = session["results_per_page"]
@@ -51,58 +51,43 @@ defmodule PinchflatWeb.Sources.SourceLive.IndexTableLive do
     |> then(&{:noreply, &1})
   end
 
-  defp sort_attr(:pending_count), do: dynamic([s, mp, dl, pe], pe.pending_count)
-  defp sort_attr(:downloaded_count), do: dynamic([s, mp, dl], dl.downloaded_count)
-  defp sort_attr(:media_size_bytes), do: dynamic([s, mp, dl], dl.media_size_bytes)
   defp sort_attr(:media_profile_name), do: dynamic([s, mp], fragment("? COLLATE NOCASE", mp.name))
   defp sort_attr(:custom_name), do: dynamic([s], fragment("? COLLATE NOCASE", s.custom_name))
   defp sort_attr(:enabled), do: dynamic([s], s.enabled)
 
+  @ets_sort_keys [:pending_count, :downloaded_count, :media_size_bytes]
+
   defp set_sources(%{assigns: assigns} = socket) do
     sources =
-      sources_query()
-      |> order_by(^[{assigns.sort_direction, sort_attr(assigns.sort_key)}, asc: :id])
-      |> limit(^assigns.limit)
-      |> offset(^assigns.offset)
-      |> Repo.all()
+      if assigns.sort_key in @ets_sort_keys do
+        sources_query()
+        |> Repo.all()
+        |> Enum.map(&merge_counts/1)
+        |> Enum.sort_by(&Map.get(&1, assigns.sort_key, 0), assigns.sort_direction)
+        |> Enum.slice(assigns.offset, assigns.limit)
+      else
+        sources_query()
+        |> order_by(^[{assigns.sort_direction, sort_attr(assigns.sort_key)}, asc: :id])
+        |> limit(^assigns.limit)
+        |> offset(^assigns.offset)
+        |> Repo.all()
+        |> Enum.map(&merge_counts/1)
+      end
 
     assign(socket, %{sources: sources})
   end
 
+  defp merge_counts(source) do
+    default = %{downloaded_count: 0, pending_count: 0, media_size_bytes: 0}
+    counts = Cache.get({:source_counts, source.id}, default)
+    Map.merge(source, Map.merge(default, counts))
+  end
+
   defp sources_query do
-    downloaded_subquery =
-      from(
-        m in MediaItem,
-        select: %{downloaded_count: count(m.id), source_id: m.source_id, media_size_bytes: sum(m.media_size_bytes)},
-        where: ^MediaQuery.downloaded(),
-        group_by: m.source_id
-      )
-
-    pending_subquery =
-      from(
-        m in MediaItem,
-        inner_join: s in assoc(m, :source),
-        inner_join: mp in assoc(s, :media_profile),
-        select: %{pending_count: count(m.id), source_id: m.source_id},
-        where: ^MediaQuery.pending(),
-        group_by: m.source_id
-      )
-
     from s in Source,
-      as: :source,
       inner_join: mp in assoc(s, :media_profile),
-      left_join: d in subquery(downloaded_subquery),
-      on: d.source_id == s.id,
-      left_join: p in subquery(pending_subquery),
-      on: p.source_id == s.id,
-      on: d.source_id == s.id,
       where: is_nil(s.marked_for_deletion_at) and is_nil(mp.marked_for_deletion_at),
       preload: [media_profile: mp],
-      select: map(s, ^Source.__schema__(:fields)),
-      select_merge: %{
-        downloaded_count: coalesce(d.downloaded_count, 0),
-        pending_count: coalesce(p.pending_count, 0),
-        media_size_bytes: coalesce(d.media_size_bytes, 0)
-      }
+      select: map(s, ^Source.__schema__(:fields))
   end
 end
