@@ -20,7 +20,7 @@ defmodule Pinchflat.Repo.Migrations.AddMediaItemsDownloadedCoveringIndex do
     execute """
     CREATE INDEX IF NOT EXISTS idx_media_items_downloaded_agg
     ON media_items(source_id, media_size_bytes)
-    WHERE media_filepath IS NOT NULL
+    WHERE NOT (media_filepath IS NULL)
     """
   end
 
