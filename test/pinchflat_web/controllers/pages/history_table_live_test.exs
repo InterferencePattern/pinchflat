@@ -5,7 +5,6 @@ defmodule Pinchflat.Pages.HistoryTableLiveTest do
   import Pinchflat.MediaFixtures
   import Pinchflat.SourcesFixtures
 
-  alias Pinchflat.Cache
   alias Pinchflat.Pages.HistoryTableLive
 
   describe "initial rendering" do
@@ -27,20 +26,4 @@ defmodule Pinchflat.Pages.HistoryTableLiveTest do
     end
   end
 
-  describe "count caching" do
-    test "uses cached count for total_record_count display when cache is populated", %{conn: conn} do
-      source = source_fixture()
-      _media_item = media_item_fixture(source_id: source.id)
-
-      # Pre-populate the cache with a known value
-      Cache.put(:history_downloaded_count, 99)
-
-      {:ok, _view, html} = live_isolated(conn, HistoryTableLive, session: %{"media_state" => "downloaded"})
-
-      # The rendered count should reflect the cached value, not the real DB count
-      assert html =~ "99"
-
-      Cache.delete(:history_downloaded_count)
-    end
-  end
 end

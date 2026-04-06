@@ -249,7 +249,7 @@ defmodule Pinchflat.SlowIndexing.SlowIndexingHelpers do
     archive_contents =
       source
       |> get_media_items_for_download_archive()
-      |> Enum.map_join("\n", fn media_item -> "youtube #{media_item.media_id}" end)
+      |> Enum.map_join("\n", fn media_id -> "youtube #{media_id}" end)
 
     case File.write(tmpfile, archive_contents) do
       :ok -> tmpfile
@@ -273,6 +273,7 @@ defmodule Pinchflat.SlowIndexing.SlowIndexingHelpers do
     |> order_by(desc: :uploaded_at)
     |> limit(50)
     |> offset(20)
+    |> select([mi], mi.media_id)
     |> Repo.all()
   end
 
