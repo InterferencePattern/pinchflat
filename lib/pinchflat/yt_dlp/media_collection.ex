@@ -61,6 +61,49 @@ defmodule Pinchflat.YtDlp.MediaCollection do
   end
 
   @doc """
+  Returns a list of video IDs for all media in the collection using yt-dlp's
+  flat playlist mode. This avoids per-video HTTP requests by fetching only
+  the minimal data available from playlist browse API responses.
+
+  Returns {:ok, [%{media_id: string, url: string}]} | {:error, any, ...}.
+  """
+  def get_media_ids_for_collection(url, command_opts \\ [], addl_opts \\ []) do
+    all_command_opts =
+      [:simulate, :skip_download, :ignore_no_formats_error, :no_warnings, :flat_playlist] ++
+        command_opts
+
+    use_cookies = Keyword.get(addl_opts, :use_cookies, false)
+    output_template = YtDlpMedia.flat_indexing_output_template()
+    runner_opts = [use_cookies: use_cookies]
+    action = :get_media_ids_for_collection
+
+    case backend_runner().run(url, action, all_command_opts, output_template, runner_opts) do
+      {:ok, output} ->
+        parsed =
+          output
+          |> String.split("\n", trim: true)
+          |> Enum.map(fn line ->
+            case Phoenix.json_library().decode(line) do
+              {:ok, %{"id" => id, "url" => video_url}} ->
+                %{media_id: id, url: video_url}
+
+              {:ok, %{"id" => id}} ->
+                %{media_id: id, url: "https://www.youtube.com/watch?v=#{id}"}
+
+              _ ->
+                nil
+            end
+          end)
+          |> Enum.reject(&is_nil/1)
+
+        {:ok, parsed}
+
+      err ->
+        err
+    end
+  end
+
+  @doc """
   Gets a source's ID and name from its URL.
 
   yt-dlp does not _really_ have source-specific functions that return what

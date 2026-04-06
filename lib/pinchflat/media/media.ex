@@ -66,6 +66,21 @@ defmodule Pinchflat.Media do
   end
 
   @doc """
+  Returns a MapSet of media_id strings for all media items belonging to
+  the given source. Used to efficiently check which videos already exist
+  in the database before fetching their full metadata from yt-dlp.
+
+  Returns MapSet.t(String.t())
+  """
+  def media_ids_for_source(%Source{} = source) do
+    MediaQuery.new()
+    |> where(^MediaQuery.for_source(source))
+    |> select([mi], mi.media_id)
+    |> Repo.all()
+    |> MapSet.new()
+  end
+
+  @doc """
   Returns a list of pending media_items for a given source, where
   pending means the media_item satisfies `MediaQuery.pending`. You
   should really check out that function if you need to know more
