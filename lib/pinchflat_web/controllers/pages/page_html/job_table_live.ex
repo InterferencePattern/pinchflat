@@ -6,6 +6,14 @@ defmodule Pinchflat.Pages.JobTableLive do
   alias Pinchflat.Tasks.Task
   alias PinchflatWeb.CustomComponents.TextComponents
 
+  def render(%{loading: true} = assigns) do
+    ~H"""
+    <div class="mb-4 flex items-center">
+      <p>Loading...</p>
+    </div>
+    """
+  end
+
   def render(%{tasks: []} = assigns) do
     ~H"""
     <div class="mb-4 flex items-center">
@@ -38,9 +46,12 @@ defmodule Pinchflat.Pages.JobTableLive do
   end
 
   def mount(_params, _session, socket) do
-    PinchflatWeb.Endpoint.subscribe("job:state")
-
-    {:ok, assign(socket, tasks: get_tasks())}
+    if connected?(socket) do
+      PinchflatWeb.Endpoint.subscribe("job:state")
+      {:ok, assign(socket, tasks: get_tasks(), loading: false)}
+    else
+      {:ok, assign(socket, tasks: [], loading: true)}
+    end
   end
 
   def handle_info(%{topic: "job:state", event: "change"}, socket) do
@@ -53,6 +64,7 @@ defmodule Pinchflat.Pages.JobTableLive do
     |> where(^TasksQuery.in_state("executing"))
     |> where(^TasksQuery.has_tag("show_in_dashboard"))
     |> order_by([t, j], desc: j.attempted_at)
+    |> limit(25)
     |> Repo.all()
     |> Repo.preload([:media_item, :source])
   end

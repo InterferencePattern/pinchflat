@@ -25,7 +25,7 @@ defmodule Pinchflat.Downloading.MediaDownloader do
   returned by yt-dlp. Encountered errors are saved to the Media Item record. Saves
   the entire metadata response to the associated media_metadata record.
 
-  NOTE: related methods (like the download worker) won't download if Pthe media item's source
+  NOTE: related methods (like the download worker) won't download if the media item's source
   is set to not download media. However, I'm not enforcing that here since I need this for testing.
   This may change in the future but I'm not stressed.
 
@@ -109,7 +109,7 @@ defmodule Pinchflat.Downloading.MediaDownloader do
          {:ok, parsed_json} <- Phoenix.json_library().decode(contents) do
       Logger.info("""
       Recovery from yt-dlp error seems possible. Updating media item ##{media_with_preloads.id}
-      with parsed JSON from partial download attempt. Full download will be re-attemted in future
+      with parsed JSON from partial download attempt. Full download will be re-attempted in future
       anyway
       """)
 
@@ -139,7 +139,7 @@ defmodule Pinchflat.Downloading.MediaDownloader do
         }
       })
 
-    # Don't forgor to use preloaded associations or updates to
+    # Don't forget to use preloaded associations or updates to
     # associations won't work!
     Media.update_media_item(media_with_preloads, parsed_attrs)
   end

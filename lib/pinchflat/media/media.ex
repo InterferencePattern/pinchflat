@@ -18,6 +18,10 @@ defmodule Pinchflat.Media do
   # Some fields should only be set on insert and not on update.
   @fields_to_drop_on_update [:playlist_index]
 
+  # Fields that affect the stats StatsServer caches (downloaded counts, sizes, pending counts).
+  # When any of these change, the affected source's stats need to be refreshed.
+  @stats_fields [:media_filepath, :media_size_bytes, :prevent_download, :culled_at]
+
   @doc """
   Returns the list of media_items.
 
@@ -52,6 +56,35 @@ defmodule Pinchflat.Media do
   end
 
   @doc """
+  Returns a list of IDs for media_items that are upgradeable. This is a lighter-weight
+  version of list_upgradeable_media_items/0 that avoids loading full rows into memory.
+
+  Returns [integer()]
+  """
+  def list_upgradeable_media_item_ids do
+    MediaQuery.new()
+    |> MediaQuery.require_assoc(:media_profile)
+    |> where(^MediaQuery.upgradeable())
+    |> select([mi], mi.id)
+    |> Repo.all()
+  end
+
+  @doc """
+  Returns a MapSet of media_id strings for all media items belonging to
+  the given source. Used to efficiently check which videos already exist
+  in the database before fetching their full metadata from yt-dlp.
+
+  Returns MapSet.t(String.t())
+  """
+  def media_ids_for_source(%Source{} = source) do
+    MediaQuery.new()
+    |> where(^MediaQuery.for_source(source))
+    |> select([mi], mi.media_id)
+    |> Repo.all()
+    |> MapSet.new()
+  end
+
+  @doc """
   Returns a list of pending media_items for a given source, where
   pending means the media_item satisfies `MediaQuery.pending`. You
   should really check out that function if you need to know more
@@ -63,6 +96,7 @@ defmodule Pinchflat.Media do
     MediaQuery.new()
     |> MediaQuery.require_assoc(:media_profile)
     |> where(^dynamic(^MediaQuery.for_source(source) and ^MediaQuery.pending()))
+    |> select([m, _s, _mp], struct(m, [:id, :source_id]))
     |> Repo.all()
   end
 
@@ -87,7 +121,7 @@ defmodule Pinchflat.Media do
   Returns a list of media_items that match the search term. Adds a `matching_search_term`
   virtual field to the result set.
 
-  Has explit handling for blank search terms because SQLite doesn't like empty MATCH clauses.
+  Has explicit handling for blank search terms because SQLite doesn't like empty MATCH clauses.
 
   Returns [%MediaItem{}, ...].
   """
@@ -135,17 +169,25 @@ defmodule Pinchflat.Media do
   def create_media_item_from_backend_attrs(source, media_attrs_struct) do
     attrs = Map.merge(%{source_id: source.id}, Map.from_struct(media_attrs_struct))
 
-    %MediaItem{}
-    |> MediaItem.changeset(attrs)
-    |> Repo.insert(
-      on_conflict: [
-        set:
-          attrs
-          |> Map.drop(@fields_to_drop_on_update)
-          |> Map.to_list()
-      ],
-      conflict_target: [:source_id, :media_id]
-    )
+    result =
+      %MediaItem{}
+      |> MediaItem.changeset(attrs)
+      |> Repo.insert(
+        on_conflict: [
+          set:
+            attrs
+            |> Map.drop(@fields_to_drop_on_update)
+            |> Map.to_list()
+        ],
+        conflict_target: [:source_id, :media_id]
+      )
+
+    case result do
+      {:ok, media_item} -> broadcast_stats_change(media_item.source_id)
+      _ -> :ok
+    end
+
+    result
   end
 
   @doc """
@@ -156,9 +198,19 @@ defmodule Pinchflat.Media do
   def update_media_item(%MediaItem{} = media_item, attrs) do
     update_attrs = Map.drop(attrs, @fields_to_drop_on_update)
 
-    media_item
-    |> MediaItem.changeset(update_attrs)
-    |> Repo.update()
+    result =
+      media_item
+      |> MediaItem.changeset(update_attrs)
+      |> Repo.update()
+
+    stats_relevant = Enum.any?(@stats_fields, &Map.has_key?(update_attrs, &1))
+
+    case result do
+      {:ok, updated} when stats_relevant -> broadcast_stats_change(updated.source_id)
+      _ -> :ok
+    end
+
+    result
   end
 
   @doc """
@@ -179,7 +231,14 @@ defmodule Pinchflat.Media do
 
     # Should delete these no matter what
     delete_internal_metadata_files(media_item)
-    Repo.delete(media_item)
+    result = Repo.delete(media_item)
+
+    case result do
+      {:ok, _} -> broadcast_stats_change(media_item.source_id)
+      _ -> :ok
+    end
+
+    result
   end
 
   @doc """
@@ -238,5 +297,9 @@ defmodule Pinchflat.Media do
     runner = Application.get_env(:pinchflat, :user_script_runner, UserScriptRunner)
 
     runner.run(event, media_item)
+  end
+
+  defp broadcast_stats_change(source_id) do
+    Phoenix.PubSub.broadcast(Pinchflat.PubSub, "stats:source", %{source_id: source_id})
   end
 end

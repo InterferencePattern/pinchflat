@@ -1,10 +1,10 @@
 defmodule PinchflatWeb.Pages.PageController do
   use PinchflatWeb, :controller
-  use Pinchflat.Media.MediaQuery
 
   alias Pinchflat.Repo
   alias Pinchflat.Sources.Source
   alias Pinchflat.Profiles.MediaProfile
+  alias Pinchflat.Media.MediaItem
 
   def home(conn, params) do
     done_onboarding = params["onboarding"] == "0"
@@ -20,14 +20,16 @@ defmodule PinchflatWeb.Pages.PageController do
   end
 
   defp render_home_page(conn) do
-    downloaded_media_items = where(MediaQuery.new(), ^MediaQuery.downloaded())
+    import Ecto.Query, warn: false
+
+    downloaded = from(m in MediaItem, where: not is_nil(m.media_filepath))
 
     conn
     |> render(:home,
       media_profile_count: Repo.aggregate(MediaProfile, :count, :id),
       source_count: Repo.aggregate(Source, :count, :id),
-      media_item_size: Repo.aggregate(downloaded_media_items, :sum, :media_size_bytes),
-      media_item_count: Repo.aggregate(downloaded_media_items, :count, :id)
+      media_item_size: Repo.aggregate(downloaded, :sum, :media_size_bytes),
+      media_item_count: Repo.aggregate(downloaded, :count, :id)
     )
   end
 

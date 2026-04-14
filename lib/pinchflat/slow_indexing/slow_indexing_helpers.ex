@@ -93,25 +93,73 @@ defmodule Pinchflat.SlowIndexing.SlowIndexingHelpers do
     # The media_profile is needed to determine the quality options to _then_ determine a more
     # accurate predicted filepath
     source = Repo.preload(source, [:media_profile])
-    # See the method definition below for more info on how file watchers work
-    # (important reading if you're not familiar with it)
-    {:ok, media_attributes} = setup_file_watcher_and_kickoff_indexing(source, opts)
+    was_forced = Keyword.get(opts, :was_forced, false)
+
+    result =
+      if was_forced do
+        # Full scan: re-fetches all videos including descriptions, picks up metadata
+        # changes on existing videos. Used when the user explicitly triggers a reindex.
+        # See setup_file_watcher_and_kickoff_indexing/2 for details on how file watchers work.
+        {:ok, media_attributes} = setup_file_watcher_and_kickoff_indexing(source, opts)
+        source = Repo.reload!(source)
+
+        Enum.map(media_attributes, fn media_attrs ->
+          case Media.create_media_item_from_backend_attrs(source, media_attrs) do
+            {:ok, media_item} -> media_item
+            {:error, changeset} -> changeset
+          end
+        end)
+      else
+        # Two-pass: flat fetch for all IDs, then full fetch only for new videos.
+        # Avoids per-video HTTP requests for videos already in the database.
+        index_new_media_items(source)
+      end
+
     # Reload because the source may have been updated during the (long-running) indexing process
     # and important settings like `download_media` may have changed.
     source = Repo.reload!(source)
-
-    result =
-      Enum.map(media_attributes, fn media_attrs ->
-        case Media.create_media_item_from_backend_attrs(source, media_attrs) do
-          {:ok, media_item} -> media_item
-          {:error, changeset} -> changeset
-        end
-      end)
-
     Sources.update_source(source, %{last_indexed_at: DateTime.utc_now()})
     DownloadingHelpers.enqueue_pending_download_tasks(source)
 
     result
+  end
+
+  # Two-pass indexing for normal (non-forced) runs:
+  #   Pass 1: Fetch all video IDs from the source using --flat-playlist (no per-video HTTP requests)
+  #   Pass 2: For each video ID not already in the DB, fetch full metadata and insert
+  #
+  # This avoids re-fetching descriptions and other metadata for videos we already have,
+  # which eliminates the bulk of HTTP requests for mature sources (e.g. a 300-video playlist
+  # with 5 new videos goes from ~300 requests to ~8).
+  defp index_new_media_items(%Source{} = source) do
+    should_use_cookies = Sources.use_cookies?(source, :indexing)
+    runner_opts = [use_cookies: should_use_cookies]
+
+    command_opts =
+      [output: DownloadOptionBuilder.build_output_path_for(source)] ++
+        DownloadOptionBuilder.build_quality_options_for(source)
+
+    with {:ok, flat_items} <- MediaCollection.get_media_ids_for_collection(source.original_url, [], runner_opts) do
+      existing_ids = Media.media_ids_for_source(source)
+
+      flat_items
+      |> Enum.reject(fn %{media_id: id} -> MapSet.member?(existing_ids, id) end)
+      |> Enum.map(fn %{url: video_url} ->
+        case MediaCollection.get_media_attributes_for_collection(video_url, command_opts, runner_opts) do
+          {:ok, [attrs | _]} ->
+            case Media.create_media_item_from_backend_attrs(source, attrs) do
+              {:ok, media_item} -> media_item
+              {:error, changeset} -> changeset
+            end
+
+          _ ->
+            nil
+        end
+      end)
+      |> Enum.reject(&is_nil/1)
+    else
+      _ -> []
+    end
   end
 
   # The file follower is a GenServer that watches a file for new lines and
@@ -201,7 +249,7 @@ defmodule Pinchflat.SlowIndexing.SlowIndexingHelpers do
     archive_contents =
       source
       |> get_media_items_for_download_archive()
-      |> Enum.map_join("\n", fn media_item -> "youtube #{media_item.media_id}" end)
+      |> Enum.map_join("\n", fn media_id -> "youtube #{media_id}" end)
 
     case File.write(tmpfile, archive_contents) do
       :ok -> tmpfile
@@ -225,6 +273,7 @@ defmodule Pinchflat.SlowIndexing.SlowIndexingHelpers do
     |> order_by(desc: :uploaded_at)
     |> limit(50)
     |> offset(20)
+    |> select([mi], mi.media_id)
     |> Repo.all()
   end
 

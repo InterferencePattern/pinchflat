@@ -3,6 +3,7 @@ defmodule PinchflatWeb.Sources.IndexTableLive do
   use Pinchflat.Media.MediaQuery
   use Pinchflat.Sources.SourcesQuery
 
+  alias Pinchflat.Cache
   alias Pinchflat.Repo
   alias Pinchflat.Sources
   alias Pinchflat.Sources.Source
@@ -74,30 +75,38 @@ defmodule PinchflatWeb.Sources.IndexTableLive do
   defp get_sources do
     query =
       from s in Source,
-        as: :source,
         inner_join: mp in assoc(s, :media_profile),
         where: is_nil(s.marked_for_deletion_at) and is_nil(mp.marked_for_deletion_at),
         preload: [media_profile: mp],
         order_by: [asc: s.custom_name],
-        select: map(s, ^Source.__schema__(:fields)),
-        select_merge: %{
-          downloaded_count:
-            subquery(
-              from m in MediaItem,
-                where: m.source_id == parent_as(:source).id,
-                where: ^MediaQuery.downloaded(),
-                select: count(m.id)
-            ),
-          pending_count:
-            subquery(
-              from m in MediaItem,
-                join: s in assoc(m, :source),
-                where: m.source_id == parent_as(:source).id,
-                where: ^MediaQuery.pending(),
-                select: count(m.id)
-            )
-        }
+        select: map(s, ^Source.__schema__(:fields))
 
-    Repo.all(query)
+    query
+    |> Repo.all()
+    |> Enum.map(fn source ->
+      counts =
+        Cache.get({:source_counts, source.id}, fn ->
+          %{
+            downloaded_count:
+              Repo.aggregate(
+                from(m in MediaItem, where: m.source_id == ^source.id and ^MediaQuery.downloaded()),
+                :count,
+                :id
+              ) || 0,
+            pending_count:
+              Repo.aggregate(
+                from(m in MediaItem,
+                  inner_join: s in assoc(m, :source),
+                  inner_join: mp in assoc(s, :media_profile),
+                  where: m.source_id == ^source.id and ^MediaQuery.pending()
+                ),
+                :count,
+                :id
+              ) || 0
+          }
+        end)
+
+      Map.merge(source, counts)
+    end)
   end
 end

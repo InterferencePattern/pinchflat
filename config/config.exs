@@ -32,7 +32,8 @@ config :pinchflat,
 
 config :pinchflat, Pinchflat.Repo,
   journal_mode: :wal,
-  pool_size: 5
+  pool_size: 5,
+  busy_timeout: 5000
 
 # Configures the endpoint
 config :pinchflat, PinchflatWeb.Endpoint,

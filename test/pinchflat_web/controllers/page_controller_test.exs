@@ -3,6 +3,14 @@ defmodule PinchflatWeb.PageControllerTest do
 
   alias Pinchflat.Settings
 
+  describe "GET / home page" do
+    test "renders successfully", %{conn: conn} do
+      Settings.set(onboarding: false)
+      conn = get(conn, ~p"/")
+      assert html_response(conn, 200) =~ "MENU"
+    end
+  end
+
   describe "GET / when testing onboarding" do
     test "sets the onboarding setting to true when onboarding", %{conn: conn} do
       _conn = get(conn, ~p"/")

@@ -108,6 +108,15 @@ defmodule Pinchflat.YtDlp.Media do
   end
 
   @doc """
+  Returns the minimal output template for the flat pass of slow indexing.
+  yt-dlp can satisfy this from playlist browse API responses without
+  making per-video HTTP requests.
+  """
+  def flat_indexing_output_template do
+    "%(.{id,url})j"
+  end
+
+  @doc """
   Returns the output template for yt-dlp's indexing command.
 
   NOTE: playlist_index is really only useful for playlists that will never change their order.

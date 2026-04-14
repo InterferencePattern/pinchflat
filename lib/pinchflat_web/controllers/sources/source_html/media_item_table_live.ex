@@ -2,6 +2,7 @@ defmodule PinchflatWeb.Sources.MediaItemTableLive do
   use PinchflatWeb, :live_view
   use Pinchflat.Media.MediaQuery
 
+  alias Pinchflat.Cache
   alias Pinchflat.Repo
   alias Pinchflat.Sources
   alias Pinchflat.Utils.NumberUtils
@@ -87,7 +88,7 @@ defmodule PinchflatWeb.Sources.MediaItemTableLive do
     media_state = session["media_state"]
     source = Sources.get_source!(session["source_id"])
     base_query = generate_base_query(source, media_state)
-    pagination_attrs = fetch_pagination_attributes(base_query, page, nil)
+    pagination_attrs = fetch_pagination_attributes(base_query, page, nil, source.id, media_state)
 
     new_assigns =
       Map.merge(
@@ -105,14 +106,14 @@ defmodule PinchflatWeb.Sources.MediaItemTableLive do
   def handle_event("page_change", %{"direction" => direction}, %{assigns: assigns} = socket) do
     direction = if direction == "inc", do: 1, else: -1
     new_page = assigns.page + direction
-    new_assigns = fetch_pagination_attributes(assigns.base_query, new_page, assigns.search_term)
+    new_assigns = fetch_pagination_attributes(assigns.base_query, new_page, assigns.search_term, assigns.source.id, assigns.media_state)
 
     {:noreply, assign(socket, new_assigns)}
   end
 
   def handle_event("search_term", params, socket) do
     search_term = Map.get(params, "q", nil)
-    new_assigns = fetch_pagination_attributes(socket.assigns.base_query, 1, search_term)
+    new_assigns = fetch_pagination_attributes(socket.assigns.base_query, 1, search_term, socket.assigns.source.id, socket.assigns.media_state)
 
     {:noreply, assign(socket, new_assigns)}
   end
@@ -126,15 +127,20 @@ defmodule PinchflatWeb.Sources.MediaItemTableLive do
   end
 
   def handle_info(%{topic: "media_table", event: "reload"}, %{assigns: assigns} = socket) do
-    new_assigns = fetch_pagination_attributes(assigns.base_query, assigns.page, assigns.search_term)
+    new_assigns = fetch_pagination_attributes(assigns.base_query, assigns.page, assigns.search_term, assigns.source.id, assigns.media_state)
 
     {:noreply, assign(socket, new_assigns)}
   end
 
-  defp fetch_pagination_attributes(base_query, page, ""), do: fetch_pagination_attributes(base_query, page, nil)
+  defp fetch_pagination_attributes(base_query, page, "", source_id, media_state),
+    do: fetch_pagination_attributes(base_query, page, nil, source_id, media_state)
 
-  defp fetch_pagination_attributes(base_query, page, nil) do
-    total_record_count = Repo.aggregate(base_query, :count, :id)
+  defp fetch_pagination_attributes(base_query, page, nil, source_id, media_state) do
+    total_record_count =
+      Cache.get({:media_item_count, source_id, media_state}, fn ->
+        Repo.aggregate(base_query, :count, :id)
+      end)
+
     total_pages = max(ceil(total_record_count / @limit), 1)
     page = NumberUtils.clamp(page, 1, total_pages)
 
@@ -153,10 +159,14 @@ defmodule PinchflatWeb.Sources.MediaItemTableLive do
     }
   end
 
-  defp fetch_pagination_attributes(base_query, page, search_term) do
+  defp fetch_pagination_attributes(base_query, page, search_term, source_id, media_state) do
     filtered_base_query = filtered_base_query(base_query, search_term)
 
-    total_record_count = Repo.aggregate(base_query, :count, :id)
+    total_record_count =
+      Cache.get({:media_item_count, source_id, media_state}, fn ->
+        Repo.aggregate(base_query, :count, :id)
+      end)
+
     filtered_record_count = Repo.aggregate(filtered_base_query, :count, :id)
     total_pages = max(ceil(filtered_record_count / @limit), 1)
     page = NumberUtils.clamp(page, 1, total_pages)

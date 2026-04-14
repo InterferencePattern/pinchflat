@@ -24,6 +24,7 @@ defmodule Pinchflat.Application do
       Pinchflat.Boot.PostJobStartupTasks,
       {DNSCluster, query: Application.get_env(:pinchflat, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Pinchflat.PubSub},
+      Pinchflat.Cache.StatsServer,
       # Start the Finch HTTP client for sending emails
       {Finch, name: Pinchflat.Finch},
       # Start a worker by calling: Pinchflat.Worker.start_link(arg)
