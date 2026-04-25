@@ -21,6 +21,14 @@ defmodule Pinchflat.Repo.Migrations.AddMediaItemsCullableIndex do
       ON media_items (source_id, media_downloaded_at)
       WHERE NOT (media_filepath IS NULL)
     """
+
+    # Without sqlite_stat1, the planner can't choose between this index and
+    # idx_media_items_downloaded_agg (20260405000001), which shares the same
+    # `WHERE NOT (media_filepath IS NULL)` predicate but is keyed on
+    # (source_id, media_size_bytes) and so can't range-seek by media_downloaded_at.
+    # On an unANALYZEd DB it picks the wrong one and the retention SELECT
+    # full-scans (~50s on spinning disk) — see 2026-04-24 incident.
+    execute "ANALYZE"
   end
 
   def down do
