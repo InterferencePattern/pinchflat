@@ -84,11 +84,14 @@ defmodule Pinchflat.Media.MediaQuery do
   end
 
   def past_retention_period do
+    # The subtraction is applied to `now` rather than wrapping `media_downloaded_at`
+    # in DATETIME(...), so SQLite can use an index on media_downloaded_at for the
+    # range comparison. See migration 20260414000001.
     dynamic(
       [mi, source],
       fragment("""
         IFNULL(retention_period_days, 0) > 0 AND
-        DATETIME(media_downloaded_at, '+' || retention_period_days || ' day') < DATETIME('now')
+        media_downloaded_at < DATETIME('now', '-' || retention_period_days || ' day')
       """)
     )
   end
